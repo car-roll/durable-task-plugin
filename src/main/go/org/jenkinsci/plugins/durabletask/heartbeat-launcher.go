@@ -198,10 +198,11 @@ func main() {
 		argIndex := 0
 		for argKey, argValue := range defined {
 			if argKey != daemonFlag {
-				rebuiltArgs[argIndex] = argKey + "=" + argValue
+				rebuiltArgs[argIndex] = fmt.Sprintf("-%v=%v", argKey, argValue)
+				argIndex++
 			}
 		}
-		doubleLaunchCmd := exec.Command(os.Args[0], os.Args[1:]...)
+		doubleLaunchCmd := exec.Command(os.Args[0], rebuiltArgs...)
 		doubleLaunchCmd.Stdout = nil
 		doubleLaunchCmd.Stderr = nil
 		doubleLaunchCmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
