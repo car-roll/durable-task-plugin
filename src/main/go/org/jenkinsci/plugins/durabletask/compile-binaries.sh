@@ -1,4 +1,4 @@
-#! /bin/bash
+#! /bin/sh
 set -x
 NAME="heartbeat-launcher"
 rm -rf ${NAME}-*
