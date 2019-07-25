@@ -29,6 +29,7 @@ import hudson.ExtensionList;
 import hudson.FilePath;
 import hudson.Launcher;
 import hudson.Platform;
+import hudson.Proc;
 import hudson.model.Slave;
 import hudson.plugins.sshslaves.SSHLauncher;
 import hudson.remoting.VirtualChannel;
@@ -47,6 +48,7 @@ import java.util.Collections;
 import java.util.EnumSet;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -71,7 +73,7 @@ import org.jvnet.hudson.test.LoggerRule;
 import org.jvnet.hudson.test.SimpleCommandLauncher;
 
 enum TestPlatform {
-    NATIVE, ALPINE, CENTOS, UBUNTU, SLIM, SIMPLE
+    NATIVE, SIMPLE, ALPINE, CENTOS, UBUNTU, SLIM
 }
 
 @RunWith(Parameterized.class)
@@ -167,8 +169,8 @@ public class BourneShellScriptTest {
                 break;
         }
         return new DumbSlave("docker",
-                "/home/test",
-                new SSHLauncher(container.ipBound(22), container.port(22), "test", "test", "", "", customJavaPath, null, null));
+                             "/home/test",
+                             new SSHLauncher(container.ipBound(22), container.port(22), "test", "test", "", "", customJavaPath, null, null));
     }
 
     private Slave prepareAgentCommandLauncher() throws Exception{
@@ -177,7 +179,6 @@ public class BourneShellScriptTest {
         String name = "docker";
         String agent = "agent-" + counter++;
         String remoteFs = "/home/jenkins/" + agent;
-
         String dockerRunSimple = String.format("docker run -i --rm --name %s jenkinsci/slave:3.7-1 java -jar /usr/share/jenkins/slave.jar", agent);
         return new DumbSlave(name, remoteFs, new SimpleCommandLauncher(dockerRunSimple));
     }
@@ -411,6 +412,52 @@ public class BourneShellScriptTest {
         c.cleanup(ws);
     }
 
+    @Issue("JENKINS-58290")
+    @Test public void backgroundLaunch() throws IOException, InterruptedException {
+        int sleepSeconds = -1;
+        switch (platform) {
+            case NATIVE:
+                sleepSeconds = 0;
+                break;
+            case CENTOS:
+            case UBUNTU:
+            case SIMPLE:
+                sleepSeconds = 10;
+                break;
+            case ALPINE:
+            case SLIM:
+                sleepSeconds = 45;
+                break;
+            default:
+                Assert.fail("Unknown enum value: " + platform);
+                break;
+        }
+        final AtomicReference<Proc> proc = new AtomicReference<>();
+        Launcher decorated = new Launcher.DecoratedLauncher(launcher) {
+            @Override public Proc launch(Launcher.ProcStarter starter) throws IOException {
+                Proc delegate = super.launch(starter);
+                assertTrue(proc.compareAndSet(null, delegate));
+                return delegate;
+            }
+        };
+        String script = String.format("echo hello world; sleep 5; echo long since started; sleep %s", sleepSeconds - 5);
+        ByteArrayOutputStream baos;
+        Controller c = new BourneShellScript(script).launch(new EnvVars(), ws, decorated, listener);
+        baos = new ByteArrayOutputStream();
+        while (c.exitStatus(ws, launcher, listener) == null) {
+            c.writeLog(ws, baos);
+            if (baos.toString().contains("long since started")) {
+                assertNotNull(proc.get());
+                assertFalse("JENKINS-58290: wrapper process still running:\n" + baos, proc.get().isAlive());
+            }
+            Thread.sleep(100);
+        }
+        assertEquals(0, c.exitStatus(ws, launcher, listener).intValue());
+        assertTrue(baos.toString().contains("hello world"));
+        c.cleanup(ws);
+        assertThat(getZombies(), isEmptyString());
+    }
+
     private String getZombies() throws InterruptedException, IOException {
         // Due to backgrounding, running durable-task in a docker container with init process is guaranteed to leave a zombie. Just let this test pass.
         // See PR #98 (https://github.com/jenkinsci/durable-task-plugin/pull/98)
@@ -422,7 +469,7 @@ public class BourneShellScriptTest {
         String psString = null;
         do {
             Thread.sleep(1000);
-           psString = psOut(psFormat);
+            psString = psOut(psFormat);
         } while (psString.contains("sh -xe " + ws.getRemote()));
 
         // Give some time to see if binary becomes a zombie
@@ -454,9 +501,10 @@ public class BourneShellScriptTest {
     }
 
     /**
-     * Convenience method that sets the `ps` column format to PID, parent PID, process status, and launch command of the process
+     * Convenience method that will set the `ps -o` column format to a consistent output across *NIX flavors.
+     * The column format is process PID, parent PID, process status, and launch command of the process.
      *
-     * @return
+     * @return String of the `ps -o` column format
      */
     private String setPsFormat() {
         String cmdCol = null;

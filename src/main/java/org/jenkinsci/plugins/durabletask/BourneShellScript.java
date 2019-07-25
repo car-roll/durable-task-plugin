@@ -28,27 +28,21 @@ import hudson.EnvVars;
 import hudson.Extension;
 import hudson.FilePath;
 import hudson.Launcher;
-import hudson.LauncherDecorator;
 import hudson.Platform;
 import hudson.Util;
 import hudson.model.TaskListener;
 import hudson.tasks.Shell;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.URI;
-import java.net.URL;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
-import java.util.WeakHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.io.File;
 import javax.annotation.Nonnull;
-
 import jenkins.model.Jenkins;
 import jenkins.security.MasterToSlaveCallable;
 import hudson.remoting.VirtualChannel;
@@ -56,8 +50,6 @@ import org.kohsuke.stapler.DataBoundConstructor;
 import javax.annotation.CheckForNull;
 import jenkins.MasterToSlaveFileCallable;
 import com.google.common.io.Files;
-
-
 
 /**
  * Runs a Bourne shell script on a Unix node using {@code nohup}.
@@ -70,10 +62,17 @@ public final class BourneShellScript extends FileMonitoringTask {
 
     private static final String SYSTEM_DEFAULT_CHARSET = "SYSTEM_DEFAULT";
 
-    /** Number of times we will show launch diagnostics in a newly encountered workspace before going mute to save resources. */
+    private static final String LAUNCH_DIAGNOSTICS_PROP = BourneShellScript.class.getName() + ".LAUNCH_DIAGNOSTICS";
+    /**
+     * Whether to stream stdio from the wrapper script, which should normally not print any.
+     * Copying output from the controller process consumes a Java thread, so we want to avoid it generally.
+     * If requested, we can do this to assist in diagnosis.
+     * (For example, if we are unable to write to a workspace due to permissions,
+     * we would want to see that error message.)
+     */
     @SuppressWarnings("FieldMayBeFinal")
     // TODO use SystemProperties if and when unrestricted
-    private static int NOVEL_WORKSPACE_DIAGNOSTICS_COUNT = Integer.getInteger(BourneShellScript.class.getName() + ".NOVEL_WORKSPACE_DIAGNOSTICS_COUNT", 10);
+    private static boolean LAUNCH_DIAGNOSTICS = Boolean.getBoolean(LAUNCH_DIAGNOSTICS_PROP);
 
     private final String LAUNCHER_PREFIX = "heartbeat-launcher-";
 
@@ -106,17 +105,6 @@ public final class BourneShellScript extends FileMonitoringTask {
     @Override public void captureOutput() {
         capturingOutput = true;
     }
-
-    /**
-     * Set of workspaces which we have already run a process in.
-     * Copying output from the controller process consumes a Java thread, so we want to avoid it generally.
-     * But we do it the first few times we run a process in a new workspace, to assist in diagnosis.
-     * (For example, if we are unable to write to it due to permissions, we want to see that error message.)
-     * Ideally we would display output the first time a given {@link Launcher} was used in that workspace,
-     * but this seems impractical since {@link LauncherDecorator#decorate} may be called anew for each process,
-     * and forcing the resulting {@link Launcher}s to implement {@link Launcher#equals} seems onerous.
-     */
-    private static final Map<FilePath,Integer> encounteredPaths = new WeakHashMap<FilePath,Integer>();
 
     @Override protected FileMonitoringController launchWithCookie(FilePath ws, Launcher launcher, TaskListener listener, EnvVars envVars, String cookieVariable, String cookieValue) throws IOException, InterruptedException {
         if (script.isEmpty()) {
@@ -179,25 +167,19 @@ public final class BourneShellScript extends FileMonitoringTask {
             String scriptString = scriptLauncherCmd(c, ws, interpreter, scriptPath, cookieValue, cookieVariable);
             scriptString = scriptString.replace("$", "$$"); // escape against EnvVars jobEnv in LocalLauncher.launch
             launcherCmd = new ArrayList<>();
-            launcherCmd.addAll(Arrays.asList("sh", "-c", scriptString));
+            if (LAUNCH_DIAGNOSTICS) {
+                launcherCmd.addAll(Arrays.asList("sh", "-c", scriptString));
+            } else {
+                // JENKINS-58290: launch in the background. Also close stdout/err so docker-exec and the like do not wait.
+                launcherCmd.addAll(Arrays.asList("sh", "-c", "(" + scriptString + ") >&- 2>&- &"));
+            }
         }
 
         LOGGER.log(Level.FINE, "launching {0}", launcherCmd);
         Launcher.ProcStarter ps = launcher.launch().cmds(launcherCmd).envs(escape(envVars)).pwd(ws).quiet(true);
-        boolean novel;
-        synchronized (encounteredPaths) {
-            Integer cnt = encounteredPaths.get(ws);
-            if (cnt == null) {
-                cnt = 0;
-            }
-            novel = cnt < NOVEL_WORKSPACE_DIAGNOSTICS_COUNT;
-            encounteredPaths.put(ws, cnt + 1);
-        }
-        if (novel) {
-            // First time in this combination. Display any output from the wrapper script for diagnosis.
+        if (LAUNCH_DIAGNOSTICS) {
             ps.stdout(listener);
         } else {
-            // Second or subsequent time. Suppress output to save a thread.
             ps.readStdout().readStderr(); // TODO RemoteLauncher.launch fails to check ps.stdout == NULL_OUTPUT_STREAM, so it creates a useless thread even if you never called stdout(…)
         }
         ps.start();
@@ -223,7 +205,10 @@ public final class BourneShellScript extends FileMonitoringTask {
         if (capturingOutput) {
             cmd.add("-output=" + outputFile);
         }
-        cmd.add("-daemon");
+        if (!LAUNCH_DIAGNOSTICS) {
+            // JENKINS-58290: launch in the background. No need to close stdout/err, binary does not write to them.
+            cmd.add("-daemon");
+        }
         return cmd;
     }
 
@@ -306,6 +291,9 @@ public final class BourneShellScript extends FileMonitoringTask {
                 long currentTimestamp = getLogFile(workspace).lastModified();
                 if (currentTimestamp == 0) {
                     listener.getLogger().println("process apparently never started in " + controlDir);
+                    if (!LAUNCH_DIAGNOSTICS) {
+                        listener.getLogger().println("(running Jenkins temporarily with -D" + LAUNCH_DIAGNOSTICS_PROP + "=true might make the problem clearer)");
+                    }
                     return recordExitStatus(workspace, -2);
                 } else if (checkedTimestamp > 0) {
                     if (currentTimestamp < checkedTimestamp) {
