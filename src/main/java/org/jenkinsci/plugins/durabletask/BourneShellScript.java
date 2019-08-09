@@ -65,7 +65,7 @@ public final class BourneShellScript extends FileMonitoringTask {
     private static final Logger LOGGER = Logger.getLogger(BourneShellScript.class.getName());
 
     private static enum OsType {DARWIN, UNIX, WINDOWS, ZOS}
-    private enum ArchType {BIT_32, BIT_64}
+    private enum ArchType {_32, _64}
 
     private static final String SYSTEM_DEFAULT_CHARSET = "SYSTEM_DEFAULT";
 
@@ -117,8 +117,9 @@ public final class BourneShellScript extends FileMonitoringTask {
         if (script.isEmpty()) {
             listener.getLogger().println("Warning: was asked to run an empty script");
         }
-        OsAndArchType agentInfo = ws.act(new getOsAndArchitecture());
-        OsType os = ws.act(new getOsType());
+        OsAndArchType agentInfo = ws.act(new getOsandArchitecture());
+//        OsType os = ws.act(new getOsType());
+        OsType os = agentInfo.getOs();
         String scriptEncodingCharset = "UTF-8";
         if(os == OsType.ZOS) {
             Charset zOSSystemEncodingCharset = Charset.forName(ws.act(new getIBMzOsEncoding()));
@@ -151,7 +152,8 @@ public final class BourneShellScript extends FileMonitoringTask {
         // The temporary variable is to ensure JENKINS_SERVER_COOKIE=durable-… does not appear even in argv[], lest it be confused with the environment.
         envVars.put(cookieVariable, "please-do-not-kill-me");
 
-        String arch = ws.act(new getArchitecture());
+//        String arch = ws.act(new getArchitecture());
+        String arch = agentInfo.getArch().toString();
         List<String> launcherCmd;
         String launcherBinary = LAUNCHER_PREFIX + os.toString().toLowerCase(Locale.ENGLISH) + arch;
         try (InputStream launcherStream = DurableTask.class.getResourceAsStream(launcherBinary)) {
@@ -352,7 +354,7 @@ public final class BourneShellScript extends FileMonitoringTask {
 
     }
 
-    private final class OsAndArchType {
+    private static final class OsAndArchType {
         private final OsType os;
         private final ArchType arch;
 
@@ -370,7 +372,7 @@ public final class BourneShellScript extends FileMonitoringTask {
         }
     }
 
-    private static final class getOsandArchType extends MasterToSlaveCallable<OsAndArchType,RuntimeException> {
+    private static final class getOsandArchitecture extends MasterToSlaveCallable<OsAndArchType,RuntimeException> {
         @Override public OsAndArchType call() throws RuntimeException {
             OsType os;
             if (Platform.isDarwin()) {
