@@ -39,7 +39,6 @@ import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -69,7 +68,20 @@ public final class BourneShellScript extends FileMonitoringTask {
 
     private static final String LAUNCH_DIAGNOSTICS_PROP = BourneShellScript.class.getName() + ".LAUNCH_DIAGNOSTICS";
 
-    private enum OsType {DARWIN, UNIX, WINDOWS, ZOS}
+    private enum OsType {
+        DARWIN("darwin"),
+        UNIX("unix"),
+        WINDOWS("windows"),
+        ZOS("zos");
+
+        private final String binaryName;
+        OsType(final String binaryName) {
+            this.binaryName = binaryName;
+        }
+        public String getNameForBinary() {
+            return binaryName;
+        }
+    }
 
     private enum ArchType {_32, _64}
 
@@ -156,7 +168,7 @@ public final class BourneShellScript extends FileMonitoringTask {
 
         String arch = agentInfo.getArch().toString();
         List<String> launcherCmd;
-        String launcherBinary = LAUNCHER_PREFIX + os.toString().toLowerCase(Locale.ENGLISH) + arch;
+        String launcherBinary = LAUNCHER_PREFIX + os.getNameForBinary() + arch;
         try (InputStream launcherStream = DurableTask.class.getResourceAsStream(launcherBinary)) {
             if ((launcherStream != null) && !FORCE_SHELL_WRAPPER) {
                 FilePath controlDir = c.controlDir(ws);
