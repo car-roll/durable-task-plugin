@@ -78,7 +78,7 @@ import org.jvnet.hudson.test.LoggerRule;
 import org.jvnet.hudson.test.SimpleCommandLauncher;
 
 enum TestPlatform {
-    NATIVE, ALPINE, UBUNTU_NO_BINARY, CENTOS, UBUNTU, SLIM, NO_INIT//, UBUNTU_NO_BINARY
+    NATIVE, ALPINE, CENTOS, UBUNTU, SLIM, NO_INIT, UBUNTU_NO_BINARY
 }
 
 @RunWith(Parameterized.class)
