@@ -474,7 +474,7 @@ public class BourneShellScriptTest {
         switch (platform) {
             case SLIM:
                 // Debian slim does not have ps
-//            case NO_INIT:
+            case NO_INIT:
                 // (See JENKINS-58656) Running in a container with no init process is guaranteed to leave a zombie. Just let this test pass.
                 assumeTrue(true);
             case UBUNTU_NO_BINARY:
