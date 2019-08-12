@@ -28,6 +28,7 @@ import hudson.EnvVars;
 import hudson.Extension;
 import hudson.FilePath;
 import hudson.Launcher;
+import hudson.Main;
 import hudson.Platform;
 import hudson.Util;
 import hudson.model.Node;
@@ -35,6 +36,7 @@ import hudson.model.TaskListener;
 import hudson.tasks.Shell;
 
 import java.io.FileInputStream;
+import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.Serializable;
@@ -52,6 +54,9 @@ import javax.annotation.Nonnull;
 import jenkins.model.Jenkins;
 import jenkins.security.MasterToSlaveCallable;
 import hudson.remoting.VirtualChannel;
+import org.apache.maven.model.Model;
+import org.apache.maven.model.io.xpp3.MavenXpp3Reader;
+import org.codehaus.plexus.util.xml.pull.XmlPullParserException;
 import org.jenkinsci.plugins.workflow.FilePathUtils;
 import org.kohsuke.accmod.Restricted;
 import org.kohsuke.accmod.restrictions.NoExternalUse;
@@ -141,18 +146,27 @@ public final class BourneShellScript extends FileMonitoringTask {
 
         final Jenkins jenkins = Jenkins.get();
 
-//        Properties manifestProperties = new Properties();
         Manifest manifest;
         try (InputStream manifestStream = DurableTask.class.getResourceAsStream("/META-INF/MANIFEST.MF")) {
-//            manifestProperties.load(manifestStream);
             manifest = new Manifest(manifestStream);
         }
-//        String launcherVersion = "_" + manifestProperties.getProperty("Plugin-Version");
         Node wsNode = jenkins.getNode(FilePathUtils.getNodeName(ws));
         FilePath nodeRoot = wsNode.getRootPath();
-//        FilePath launcherPath = nodeRoot.child(launcherBinary);
 
-        String pluginVersion = manifest.getMainAttributes().getValue("Plugin-Version");
+        String pluginVersion;
+        if (Main.isUnitTest) {
+            // Manifest not available until package phase, so must use a different way to get plugin version
+            try (FileReader pomReader = new FileReader("pom.xml")) {
+                MavenXpp3Reader reader = new MavenXpp3Reader();
+                Model model = reader.read(pomReader);
+                pluginVersion = model.getProperties().getProperty("revision");
+            } catch (XmlPullParserException e) {
+                e.printStackTrace();
+                throw new InterruptedException(e.getMessage());
+            }
+        } else {
+            pluginVersion = manifest.getMainAttributes().getValue("Plugin-Version");
+        }
         AgentInfo agentInfo = nodeRoot.act(new GetAgentInfo(nodeRoot, pluginVersion));
         OsType os = agentInfo.getOs();
         String scriptEncodingCharset = "UTF-8";
@@ -170,7 +184,6 @@ public final class BourneShellScript extends FileMonitoringTask {
 
         shf.write(script, scriptEncodingCharset);
 
-//        final Jenkins jenkins = Jenkins.get();
         String shell = null;
         if (!script.startsWith("#!")) {
             shell = jenkins.getDescriptorByType(Shell.DescriptorImpl.class).getShell();
@@ -187,14 +200,11 @@ public final class BourneShellScript extends FileMonitoringTask {
         // The temporary variable is to ensure JENKINS_SERVER_COOKIE=durable-… does not appear even in argv[], lest it be confused with the environment.
         envVars.put(cookieVariable, "please-do-not-kill-me");
 
-//        String arch = agentInfo.getArch().toString();
         List<String> launcherCmd;
-//        String launcherBinary = LAUNCHER_PREFIX + os.getNameForBinary() + arch;
         FilePath launcherPath = agentInfo.getLauncherPath();
         try (InputStream launcherStream = DurableTask.class.getResourceAsStream(launcherPath.getName())) {
             if ((launcherStream != null) && !FORCE_SHELL_WRAPPER) {
                 FilePath controlDir = c.controlDir(ws);
-//                FilePath launcherPath = controlDir.child(launcherBinary);
                 if (!agentInfo.isLauncherCached()) {
                     launcherPath.copyFrom(launcherStream);
                     launcherPath.chmod(0755);
