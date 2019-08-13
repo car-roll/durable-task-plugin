@@ -35,8 +35,6 @@ import hudson.model.Node;
 import hudson.model.TaskListener;
 import hudson.tasks.Shell;
 
-import java.io.FileInputStream;
-import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.Serializable;
@@ -44,7 +42,6 @@ import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 import java.util.jar.Manifest;
 import java.util.logging.Level;
@@ -54,9 +51,6 @@ import javax.annotation.Nonnull;
 import jenkins.model.Jenkins;
 import jenkins.security.MasterToSlaveCallable;
 import hudson.remoting.VirtualChannel;
-import org.apache.maven.model.Model;
-import org.apache.maven.model.io.xpp3.MavenXpp3Reader;
-import org.codehaus.plexus.util.xml.pull.XmlPullParserException;
 import org.jenkinsci.plugins.workflow.FilePathUtils;
 import org.kohsuke.accmod.Restricted;
 import org.kohsuke.accmod.restrictions.NoExternalUse;
@@ -72,6 +66,9 @@ public final class BourneShellScript extends FileMonitoringTask {
 
     @Restricted(NoExternalUse.class)
     public static boolean FORCE_SHELL_WRAPPER = Boolean.getBoolean(BourneShellScript.class.getName() + ".FORCE_SHELL_WRAPPER");
+
+    @Restricted(NoExternalUse.class)
+    public static String PLUGIN_VERSION;
 
     private static final Logger LOGGER = Logger.getLogger(BourneShellScript.class.getName());
 
@@ -150,24 +147,14 @@ public final class BourneShellScript extends FileMonitoringTask {
         try (InputStream manifestStream = DurableTask.class.getResourceAsStream("/META-INF/MANIFEST.MF")) {
             manifest = new Manifest(manifestStream);
         }
+
         Node wsNode = jenkins.getNode(FilePathUtils.getNodeName(ws));
         FilePath nodeRoot = wsNode.getRootPath();
 
-        String pluginVersion;
-        if (Main.isUnitTest) {
-            // Manifest not available until package phase, so must use a different way to get plugin version
-            try (FileReader pomReader = new FileReader("pom.xml")) {
-                MavenXpp3Reader reader = new MavenXpp3Reader();
-                Model model = reader.read(pomReader);
-                pluginVersion = model.getProperties().getProperty("revision");
-            } catch (XmlPullParserException e) {
-                e.printStackTrace();
-                throw new InterruptedException(e.getMessage());
-            }
-        } else {
-            pluginVersion = manifest.getMainAttributes().getValue("Plugin-Version");
+        if (!Main.isUnitTest) {
+            PLUGIN_VERSION = manifest.getMainAttributes().getValue("Plugin-Version");
         }
-        AgentInfo agentInfo = nodeRoot.act(new GetAgentInfo(nodeRoot, pluginVersion));
+        AgentInfo agentInfo = nodeRoot.act(new GetAgentInfo(nodeRoot, PLUGIN_VERSION));
         OsType os = agentInfo.getOs();
         String scriptEncodingCharset = "UTF-8";
         if(os == OsType.ZOS) {
